@@ -102,9 +102,9 @@ class Track(BaseModel):
 class LibraryTrackAttributes(BaseModel):
     """Attributes for a library track (includes play count)."""
 
-    name: str
-    artist_name: str = Field(alias="artistName")
-    album_name: str = Field(alias="albumName")
+    name: str = ""
+    artist_name: str = Field("", alias="artistName")
+    album_name: str = Field("", alias="albumName")
     play_count: int = Field(0, alias="playCount")
     date_added: str | None = Field(None, alias="dateAdded")
     duration_in_millis: int = Field(0, alias="durationInMillis")
