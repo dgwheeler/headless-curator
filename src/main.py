@@ -66,26 +66,28 @@ def auth(
         rprint(f"[red]Error generating developer token:[/red] {e}")
         raise typer.Exit(1)
 
-    rprint("[green]✓[/green] Developer token generated successfully")
+    rprint("[green]✓[/green] Developer token generated successfully\n")
+
+    # Show the developer token
+    rprint("[bold]Step 1: Copy this Developer Token:[/bold]")
+    rprint()
+    console.print(Panel(developer_token, title="Developer Token", border_style="cyan"))
     rprint()
 
-    # Instructions for getting user token
-    rprint("[bold]To complete authentication, you need to obtain a Music User Token.[/bold]")
-    rprint()
-    rprint("This requires a web-based OAuth flow. You have two options:")
-    rprint()
-    rprint("1. Use Apple's MusicKit JS in a local web page")
-    rprint("2. Use a companion iOS/macOS app with MusicKit")
-    rprint()
-    rprint("For option 1, create a simple HTML page with MusicKit JS that:")
-    rprint("  - Initializes MusicKit with your developer token")
-    rprint("  - Calls music.authorize() to get the user token")
-    rprint("  - Displays the token for you to copy")
-    rprint()
+    # Open the auth helper
+    auth_helper_path = Path(__file__).parent.parent / "auth_helper.html"
+    rprint("[bold]Step 2: Complete the OAuth flow:[/bold]")
 
-    # Provide a sample HTML file path
-    sample_path = Path(__file__).parent.parent / "auth_helper.html"
-    rprint(f"A sample auth helper page can be created at: [cyan]{sample_path}[/cyan]")
+    if auth_helper_path.exists():
+        rprint(f"  Opening: [cyan]{auth_helper_path}[/cyan]")
+        webbrowser.open(f"file://{auth_helper_path.absolute()}")
+        rprint()
+        rprint("  1. Paste the Developer Token above into the web page")
+        rprint("  2. Click 'Initialize'")
+        rprint("  3. Click 'Authorize' - Grace signs in with HER Apple ID")
+        rprint("  4. Copy the Music User Token that appears")
+    else:
+        rprint("  Open auth_helper.html in a browser and follow the instructions")
     rprint()
 
     token = typer.prompt("Paste your Music User Token here", hide_input=True)
