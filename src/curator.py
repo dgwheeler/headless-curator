@@ -3,11 +3,13 @@
 import asyncio
 import random
 import time
+from dataclasses import dataclass
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from src.apple_music import AppleMusicAuth, AppleMusicClient, Track
-from src.database import Repository, TrackRecord
+from src.applescript import MusicApp, LibrarySong
+from src.database import Repository
 from src.musicbrainz import MusicBrainzClient
 from src.utils.config import Settings
 from src.utils.logging import get_logger
@@ -24,8 +26,22 @@ class PlaylistCategory:
     WILDCARD = "wildcard"
 
 
+@dataclass
+class TrackInfo:
+    """Minimal track info for playlist building."""
+
+    name: str
+    artist_name: str
+    album_name: str = ""
+    apple_music_id: str | None = None
+
+
 class Curator:
-    """Main playlist curation engine."""
+    """Main playlist curation engine.
+
+    Uses Apple Music API (developer token only) for catalog searches,
+    and AppleScript for library operations and playlist management.
+    """
 
     def __init__(
         self,
@@ -35,7 +51,7 @@ class Curator:
         self.settings = settings
         self.repository = repository
 
-        # Initialize API clients
+        # Initialize API clients (catalog-only, no user token needed)
         self.auth = AppleMusicAuth(
             team_id=settings.apple_music.team_id,
             key_id=settings.apple_music.key_id,
@@ -47,11 +63,22 @@ class Curator:
         )
         self.musicbrainz = MusicBrainzClient()
 
+        # AppleScript interface for local Music app
+        self.music_app = MusicApp()
+
     async def close(self) -> None:
         """Clean up resources."""
         await self.apple_music.close()
         await self.musicbrainz.close()
         await self.repository.close()
+
+    def _get_library_songs(self) -> list[LibrarySong]:
+        """Get songs from local Music library via AppleScript.
+
+        Returns:
+            List of library songs with play counts
+        """
+        return self.music_app.get_library_songs(limit=2000)
 
     async def discover_artists(self) -> list[str]:
         """Discover new artists based on seed artists.
@@ -126,7 +153,7 @@ class Curator:
 
         return filtered_ids
 
-    async def collect_tracks(self, artist_ids: list[str]) -> dict[str, list[Track]]:
+    async def collect_tracks(self, artist_ids: list[str]) -> dict[str, list[TrackInfo]]:
         """Collect tracks from discovered artists.
 
         Args:
@@ -137,7 +164,7 @@ class Curator:
         """
         logger.info("collecting_tracks", artist_count=len(artist_ids))
 
-        tracks_by_category: dict[str, list[Track]] = {
+        tracks_by_category: dict[str, list[TrackInfo]] = {
             PlaylistCategory.HITS: [],
             PlaylistCategory.DISCOVERY: [],
             PlaylistCategory.WILDCARD: [],
@@ -146,11 +173,11 @@ class Curator:
         now = datetime.now(timezone.utc)
         wildcard_cutoff = now - timedelta(days=self.settings.algorithm.new_release_days)
 
-        async with self.apple_music:
-            # Get library tracks for "heard" detection
-            library_tracks = await self.apple_music.get_all_library_songs()
-            library_isrcs = {t.attributes.artist_name + ":" + t.name for t in library_tracks if t.attributes}
+        # Get library tracks for "heard" detection via AppleScript
+        library_songs = self._get_library_songs()
+        library_keys = {f"{s.artist.lower()}:{s.name.lower()}" for s in library_songs}
 
+        async with self.apple_music:
             for artist_id in artist_ids:
                 top_songs = await self.apple_music.get_artist_top_songs(artist_id, limit=10)
 
@@ -165,15 +192,22 @@ class Curator:
                             continue
 
                     # Categorize track
-                    track_key = f"{track.artist_name}:{track.name}"
-                    is_known = track_key in library_isrcs
+                    track_key = f"{track.artist_name.lower()}:{track.name.lower()}"
+                    is_known = track_key in library_keys
+
+                    track_info = TrackInfo(
+                        name=track.name,
+                        artist_name=track.artist_name,
+                        album_name=track.album_name,
+                        apple_music_id=track.id,
+                    )
 
                     if track.attributes.release_datetime and track.attributes.release_datetime >= wildcard_cutoff:
-                        tracks_by_category[PlaylistCategory.WILDCARD].append(track)
+                        tracks_by_category[PlaylistCategory.WILDCARD].append(track_info)
                     elif is_known:
-                        tracks_by_category[PlaylistCategory.HITS].append(track)
+                        tracks_by_category[PlaylistCategory.HITS].append(track_info)
                     else:
-                        tracks_by_category[PlaylistCategory.DISCOVERY].append(track)
+                        tracks_by_category[PlaylistCategory.DISCOVERY].append(track_info)
 
                     # Store in database
                     await self.repository.upsert_track(
@@ -198,54 +232,23 @@ class Curator:
 
         return tracks_by_category
 
-    async def get_favorites(self) -> list[Track]:
-        """Get favorite tracks based on play counts.
+    def get_favorites(self) -> list[TrackInfo]:
+        """Get favorite tracks based on play counts from local library.
 
         Returns:
             List of most-played tracks
         """
-        async with self.apple_music:
-            library_tracks = await self.apple_music.get_all_library_songs()
+        library_songs = self._get_library_songs()
 
-            # Sort by play count
-            sorted_tracks = sorted(
-                library_tracks,
-                key=lambda t: t.play_count,
-                reverse=True,
-            )
-
-            # Update preferences in database
-            for track in sorted_tracks[:100]:  # Top 100
-                if not track.attributes:
-                    continue
-
-                db_track = await self.repository.upsert_track(
-                    apple_music_id=track.id,
-                    name=track.name,
-                    artist_name=track.attributes.artist_name,
-                    album_name=track.attributes.album_name,
-                    category=PlaylistCategory.FAVORITES,
-                )
-
-                await self.repository.upsert_preference(
-                    track_id=db_track.id,
-                    play_count=track.play_count,
-                    in_library=True,
-                )
-
-            # Convert to catalog tracks for playlist (library tracks need mapping)
-            # For now, return as Track objects (the IDs are catalog IDs)
-            favorites: list[Track] = []
-            for lt in sorted_tracks[:50]:
-                if lt.attributes and lt.play_count > 0:
-                    # Create a Track from library track data
-                    favorites.append(
-                        Track(
-                            id=lt.id,
-                            type="songs",
-                            attributes=None,  # We'll use the ID for playlist
-                        )
-                    )
+        # Already sorted by play count (descending) from MusicApp
+        favorites = []
+        for song in library_songs[:50]:
+            if song.play_count > 0:
+                favorites.append(TrackInfo(
+                    name=song.name,
+                    artist_name=song.artist,
+                    album_name=song.album,
+                ))
 
         logger.info("favorites_collected", count=len(favorites))
         return favorites
@@ -283,49 +286,45 @@ class Curator:
                     weight=new_weight,
                 )
 
-        # Boost tracks with positive signals
-        async with self.apple_music:
-            library_tracks = await self.apple_music.get_all_library_songs()
+        # Boost tracks with positive signals from library play counts
+        library_songs = self._get_library_songs()
 
-            for lt in library_tracks:
-                if not lt.attributes:
-                    continue
+        for song in library_songs:
+            db_track = await self.repository.get_track_by_name_artist(song.name, song.artist)
+            if not db_track:
+                continue
 
-                db_track = await self.repository.get_track_by_apple_id(lt.id)
-                if not db_track:
-                    continue
+            pref = await self.repository.get_preference(db_track.id)
+            if not pref:
+                continue
 
-                pref = await self.repository.get_preference(db_track.id)
-                if not pref:
-                    continue
+            # Check for play count increase
+            if song.play_count > pref.play_count:
+                plays_delta = song.play_count - pref.play_count
+                boost = 1 + (plays_delta * 0.1)  # 10% boost per play
+                new_weight = min(5.0, pref.weight * boost)
 
-                # Check for play count increase
-                if lt.play_count > pref.play_count:
-                    plays_delta = lt.play_count - pref.play_count
-                    boost = 1 + (plays_delta * 0.1)  # 10% boost per play
-                    new_weight = min(5.0, pref.weight * boost)
-
-                    await self.repository.upsert_preference(
-                        track_id=db_track.id,
-                        play_count=lt.play_count,
-                        weight=new_weight,
-                    )
-                    logger.debug(
-                        "positive_signal",
-                        track=db_track.name,
-                        plays_delta=plays_delta,
-                        new_weight=new_weight,
-                    )
+                await self.repository.upsert_preference(
+                    track_id=db_track.id,
+                    play_count=song.play_count,
+                    weight=new_weight,
+                )
+                logger.debug(
+                    "positive_signal",
+                    track=db_track.name,
+                    plays_delta=plays_delta,
+                    new_weight=new_weight,
+                )
 
         logger.info("preferences_updated")
 
     def build_playlist(
         self,
-        favorites: list[Track],
-        hits: list[Track],
-        discovery: list[Track],
-        wildcard: list[Track],
-    ) -> list[str]:
+        favorites: list[TrackInfo],
+        hits: list[TrackInfo],
+        discovery: list[TrackInfo],
+        wildcard: list[TrackInfo],
+    ) -> list[TrackInfo]:
         """Build the final playlist with weighted categories.
 
         Args:
@@ -335,7 +334,7 @@ class Curator:
             wildcard: New releases
 
         Returns:
-            List of track IDs in interleaved order
+            List of TrackInfo in interleaved order
         """
         playlist_size = self.settings.algorithm.playlist_size
         weights = self.settings.algorithm.weights
@@ -355,15 +354,15 @@ class Curator:
         random.shuffle(wildcard)
 
         # Select tracks up to target for each category
-        selected: dict[str, list[str]] = {
-            PlaylistCategory.FAVORITES: [t.id for t in favorites[: targets[PlaylistCategory.FAVORITES]]],
-            PlaylistCategory.HITS: [t.id for t in hits[: targets[PlaylistCategory.HITS]]],
-            PlaylistCategory.DISCOVERY: [t.id for t in discovery[: targets[PlaylistCategory.DISCOVERY]]],
-            PlaylistCategory.WILDCARD: [t.id for t in wildcard[: targets[PlaylistCategory.WILDCARD]]],
+        selected: dict[str, list[TrackInfo]] = {
+            PlaylistCategory.FAVORITES: favorites[: targets[PlaylistCategory.FAVORITES]],
+            PlaylistCategory.HITS: hits[: targets[PlaylistCategory.HITS]],
+            PlaylistCategory.DISCOVERY: discovery[: targets[PlaylistCategory.DISCOVERY]],
+            PlaylistCategory.WILDCARD: wildcard[: targets[PlaylistCategory.WILDCARD]],
         }
 
         # Interleave tracks to avoid clustering
-        playlist: list[str] = []
+        playlist: list[TrackInfo] = []
         categories = [PlaylistCategory.FAVORITES, PlaylistCategory.HITS, PlaylistCategory.DISCOVERY, PlaylistCategory.WILDCARD]
         category_idx = 0
 
@@ -394,36 +393,44 @@ class Curator:
 
         return playlist
 
-    async def create_or_update_playlist(self, track_ids: list[str]) -> str:
-        """Create playlist with tracks, or recreate if it exists.
+    def create_or_update_playlist(self, tracks: list[TrackInfo]) -> str:
+        """Create playlist with tracks via AppleScript.
 
-        Since PUT to modify playlist tracks returns 401, we delete the old
-        playlist and create a new one with tracks included.
+        Deletes existing playlist if present, creates new one,
+        and adds tracks by searching in the local library.
 
         Args:
-            track_ids: List of catalog track IDs to add
+            tracks: List of TrackInfo to add
 
         Returns:
-            Playlist ID
+            Playlist name (used as ID for AppleScript)
         """
         playlist_name = self.settings.user.playlist_name
+        description = f"Personalized playlist for {self.settings.user.name}, curated by Headless Curator"
 
-        async with self.apple_music:
-            # Check if playlist exists and delete it
-            existing = await self.apple_music.get_library_playlist_by_name(playlist_name)
-            if existing:
-                logger.info("deleting_old_playlist", name=playlist_name, id=existing.id)
-                await self.apple_music.delete_library_playlist(existing.id)
+        # Delete existing playlist if present
+        existing = self.music_app.get_playlist(playlist_name)
+        if existing:
+            logger.info("deleting_old_playlist", name=playlist_name)
+            self.music_app.delete_playlist(playlist_name)
 
-            # Create new playlist with tracks included
-            playlist = await self.apple_music.create_library_playlist(
-                name=playlist_name,
-                description=f"Personalized playlist for {self.settings.user.name}, curated by Headless Curator",
-                track_ids=track_ids,
-            )
+        # Create new playlist
+        self.music_app.create_playlist(playlist_name, description)
 
-            logger.info("playlist_created_with_tracks", name=playlist_name, id=playlist.id, track_count=len(track_ids))
-            return playlist.id
+        # Add tracks by searching
+        added = 0
+        for track in tracks:
+            if self.music_app.add_track_to_playlist(playlist_name, track.name, track.artist_name):
+                added += 1
+
+        logger.info(
+            "playlist_created_with_tracks",
+            name=playlist_name,
+            added=added,
+            requested=len(tracks),
+        )
+
+        return playlist_name
 
     async def refresh_playlist(self) -> dict:
         """Run a full playlist refresh.
@@ -448,24 +455,24 @@ class Curator:
             tracks_by_cat = await self.collect_tracks(artist_ids)
 
             # Get favorites from user's library
-            favorites = await self.get_favorites()
+            favorites = self.get_favorites()
 
             # Build the playlist
-            playlist_track_ids = self.build_playlist(
+            playlist_tracks = self.build_playlist(
                 favorites=favorites,
                 hits=tracks_by_cat[PlaylistCategory.HITS],
                 discovery=tracks_by_cat[PlaylistCategory.DISCOVERY],
                 wildcard=tracks_by_cat[PlaylistCategory.WILDCARD],
             )
 
-            # Create playlist with tracks (or recreate if exists)
-            playlist_id = await self.create_or_update_playlist(playlist_track_ids)
+            # Create playlist with tracks via AppleScript
+            playlist_name = self.create_or_update_playlist(playlist_tracks)
 
             # Update playlist state
             await self.repository.upsert_playlist_state(
-                playlist_id=playlist_id,
+                playlist_id=playlist_name,
                 playlist_name=self.settings.user.playlist_name,
-                track_count=len(playlist_track_ids),
+                track_count=len(playlist_tracks),
             )
 
             duration = time.time() - start_time
@@ -474,14 +481,14 @@ class Curator:
             await self.repository.log_sync(
                 sync_type="refresh",
                 status="success",
-                tracks_added=len(playlist_track_ids),
+                tracks_added=len(playlist_tracks),
                 duration_seconds=duration,
             )
 
             summary = {
                 "status": "success",
-                "playlist_id": playlist_id,
-                "track_count": len(playlist_track_ids),
+                "playlist_name": playlist_name,
+                "track_count": len(playlist_tracks),
                 "duration_seconds": round(duration, 2),
                 "artists_discovered": len(artist_ids),
             }

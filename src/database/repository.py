@@ -121,6 +121,17 @@ class Repository:
             )
             return result.scalar_one_or_none()
 
+    async def get_track_by_name_artist(self, name: str, artist_name: str) -> TrackRecord | None:
+        """Get track by name and artist (case-insensitive)."""
+        async with self.session_factory() as session:
+            result = await session.execute(
+                select(TrackRecord).where(
+                    func.lower(TrackRecord.name) == name.lower(),
+                    func.lower(TrackRecord.artist_name) == artist_name.lower(),
+                ).limit(1)
+            )
+            return result.scalar_one_or_none()
+
     async def upsert_track(
         self,
         apple_music_id: str,
