@@ -81,7 +81,11 @@ class Curator:
 
                     logger.debug("seed_artist_found", name=seed_name, apple_id=artist.id)
 
-            # Get related artists for each seed
+            # Include seed artists themselves in discovered list
+            for artist_id in seed_artist_ids:
+                discovered_artist_ids.add(artist_id)
+
+            # Try to get related artists for each seed (may fail on some APIs)
             for artist_id in seed_artist_ids:
                 related = await self.apple_music.get_related_artists(artist_id, limit=15)
                 for artist in related:
