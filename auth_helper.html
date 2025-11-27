@@ -44,7 +44,7 @@
             font-size: 14px;
             margin-right: 10px;
         }
-        input[type="text"] {
+        input[type="text"], textarea {
             width: 100%;
             padding: 12px;
             font-size: 14px;
@@ -52,6 +52,10 @@
             border-radius: 8px;
             margin-top: 10px;
             font-family: monospace;
+        }
+        textarea {
+            height: 80px;
+            resize: vertical;
         }
         button {
             background: #007aff;
@@ -107,7 +111,7 @@
                 Generate this by running your curator and copying the JWT from the logs,
                 or use the token output from <code>curator auth</code>.
             </p>
-            <input type="text" id="devToken" placeholder="eyJ0eXAiOiJKV1QiLCJhbGciOiJFUzI1NiIsImtpZCI6...">
+            <textarea id="devToken" placeholder="eyJ0eXAiOiJKV1QiLCJhbGciOiJFUzI1NiIsImtpZCI6..."></textarea>
         </div>
 
         <div class="step">
@@ -134,9 +138,16 @@
         let music = null;
 
         async function initMusicKit() {
-            const devToken = document.getElementById('devToken').value.trim();
+            // Remove ALL whitespace (spaces, newlines, tabs) from the token
+            const devToken = document.getElementById('devToken').value.replace(/\s+/g, '');
             if (!devToken) {
                 alert('Please enter your Developer Token first');
+                return;
+            }
+
+            // Basic JWT format validation
+            if (!devToken.startsWith('eyJ') || devToken.split('.').length !== 3) {
+                alert('Invalid token format. JWT should start with "eyJ" and have 3 parts separated by dots.');
                 return;
             }
 
