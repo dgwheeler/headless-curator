@@ -386,6 +386,27 @@ class AppleMusicClient:
 
         raise AppleMusicError("Failed to create playlist")
 
+    async def delete_library_playlist(self, playlist_id: str) -> bool:
+        """Delete a library playlist.
+
+        Args:
+            playlist_id: Library playlist ID
+
+        Returns:
+            True if deleted successfully
+        """
+        try:
+            await self._request(
+                "DELETE",
+                f"/me/library/playlists/{playlist_id}",
+                require_user_token=True,
+            )
+            logger.info("playlist_deleted", playlist_id=playlist_id)
+            return True
+        except AppleMusicError as e:
+            logger.warning("playlist_delete_failed", playlist_id=playlist_id, error=str(e))
+            return False
+
     async def replace_playlist_tracks(
         self,
         playlist_id: str,

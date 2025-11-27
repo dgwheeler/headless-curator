@@ -397,8 +397,8 @@ class Curator:
     async def create_or_update_playlist(self, track_ids: list[str]) -> str:
         """Create playlist with tracks, or recreate if it exists.
 
-        Since PUT to modify playlist tracks returns 401, we create a new
-        playlist with tracks included in the initial POST request.
+        Since PUT to modify playlist tracks returns 401, we delete the old
+        playlist and create a new one with tracks included.
 
         Args:
             track_ids: List of catalog track IDs to add
@@ -409,14 +409,11 @@ class Curator:
         playlist_name = self.settings.user.playlist_name
 
         async with self.apple_music:
-            # Check if playlist exists
+            # Check if playlist exists and delete it
             existing = await self.apple_music.get_library_playlist_by_name(playlist_name)
             if existing:
-                logger.info("playlist_found_will_recreate", name=playlist_name, id=existing.id)
-                # Note: We can't delete playlists via API, so we create with a slightly different name
-                # and the old one will remain. User can delete manually if desired.
-                # Actually, let's just try to create a new one - Apple might allow duplicates
-                # or we could add a timestamp
+                logger.info("deleting_old_playlist", name=playlist_name, id=existing.id)
+                await self.apple_music.delete_library_playlist(existing.id)
 
             # Create new playlist with tracks included
             playlist = await self.apple_music.create_library_playlist(
