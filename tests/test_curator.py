@@ -155,7 +155,10 @@ class TestPlaylistBuilding:
             playlist = curator.build_playlist(favorites, hits, discovery, wildcard)
 
         # Should only contain tracks from non-empty categories
-        assert len(playlist) == 18  # 8 favorites + 10 discovery (or less if limited by targets)
+        # Targets: favorites=8, hits=6, discovery=4, wildcard=2
+        # Available: favorites=20, hits=0, discovery=10, wildcard=0
+        # Result: 8 + 0 + 4 + 0 = 12
+        assert len(playlist) == 12
         assert all(tid.startswith(("fav_", "disc_")) for tid in playlist)
 
 
