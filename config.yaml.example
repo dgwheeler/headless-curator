@@ -1,0 +1,60 @@
+# Headless Curator Configuration
+# Copy this file to config.yaml and update with your settings
+
+user:
+  name: "Grace"
+  playlist_name: "Grace's Station"
+  playlist_id: null  # Auto-populated after first run
+
+# Seed artists and songs for discovery
+seeds:
+  artists:
+    - "Sam Smith"
+    - "Lewis Capaldi"
+    - "Harry Styles"
+    - "Ed Sheeran"
+    - "Calum Scott"
+  songs: []
+
+# Filtering criteria for discovered artists
+filters:
+  gender: "Male"
+  countries:
+    - "GB"  # United Kingdom
+    - "US"  # United States
+    - "IE"  # Ireland
+    - "AU"  # Australia
+    - "CA"  # Canada
+  min_release_year: 2020
+
+# Algorithm configuration
+algorithm:
+  playlist_size: 50
+  weights:
+    favorites: 0.40    # 40% - Tracks with high play counts
+    hits: 0.30         # 30% - Top tracks from discovered artists
+    discovery: 0.20    # 20% - New artists she hasn't heard
+    wildcard: 0.10     # 10% - Brand new releases (< 30 days)
+
+  # Learning parameters
+  hot_zone_size: 10      # Positions 1-10 for negative signal detection
+  hot_zone_hours: 48     # Hours in hot zone with no plays = negative
+  decay_days: 14         # Days without play before weight decay
+  new_release_days: 30   # Max age for "wildcard" tracks
+
+# Schedule configuration
+schedule:
+  refresh_time: "03:00"  # 3:00 AM local time
+  timezone: "America/Los_Angeles"
+
+# Apple Music API configuration
+apple_music:
+  # These can use environment variables with ${VAR} syntax
+  team_id: "${APPLE_TEAM_ID}"
+  key_id: "${APPLE_KEY_ID}"
+  private_key_path: "~/.secrets/apple_music_key.p8"
+  storefront: "us"
+
+# Database configuration
+database:
+  path: "curator.db"  # SQLite database file

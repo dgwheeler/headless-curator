@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Headless Curator - Apple Music Authorization</title>
+    <script src="https://js-cdn.music.apple.com/musickit/v1/musickit.js"></script>
+    <style>
+        * {
+            box-sizing: border-box;
+        }
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+            max-width: 600px;
+            margin: 50px auto;
+            padding: 20px;
+            background: #f5f5f7;
+        }
+        .card {
+            background: white;
+            border-radius: 12px;
+            padding: 30px;
+            box-shadow: 0 2px 10px rgba(0,0,0,0.1);
+        }
+        h1 {
+            margin-top: 0;
+            color: #1d1d1f;
+        }
+        .step {
+            margin: 20px 0;
+            padding: 15px;
+            background: #f5f5f7;
+            border-radius: 8px;
+        }
+        .step-number {
+            display: inline-block;
+            width: 24px;
+            height: 24px;
+            background: #007aff;
+            color: white;
+            border-radius: 50%;
+            text-align: center;
+            line-height: 24px;
+            font-size: 14px;
+            margin-right: 10px;
+        }
+        input[type="text"] {
+            width: 100%;
+            padding: 12px;
+            font-size: 14px;
+            border: 1px solid #d2d2d7;
+            border-radius: 8px;
+            margin-top: 10px;
+            font-family: monospace;
+        }
+        button {
+            background: #007aff;
+            color: white;
+            border: none;
+            padding: 12px 24px;
+            font-size: 16px;
+            border-radius: 8px;
+            cursor: pointer;
+            margin-top: 10px;
+        }
+        button:hover {
+            background: #0056b3;
+        }
+        button:disabled {
+            background: #a0a0a5;
+            cursor: not-allowed;
+        }
+        #result {
+            margin-top: 20px;
+        }
+        .token-box {
+            background: #f5f5f7;
+            padding: 15px;
+            border-radius: 8px;
+            word-break: break-all;
+            font-family: monospace;
+            font-size: 12px;
+            max-height: 150px;
+            overflow-y: auto;
+        }
+        .success {
+            color: #30d158;
+        }
+        .error {
+            color: #ff3b30;
+        }
+        .copy-btn {
+            background: #30d158;
+            margin-left: 10px;
+        }
+    </style>
+</head>
+<body>
+    <div class="card">
+        <h1>Apple Music Authorization</h1>
+        <p>This page helps you obtain a Music User Token for Headless Curator.</p>
+
+        <div class="step">
+            <span class="step-number">1</span>
+            <strong>Enter your Developer Token</strong>
+            <p style="margin: 10px 0; color: #86868b; font-size: 14px;">
+                Generate this by running your curator and copying the JWT from the logs,
+                or use the token output from <code>curator auth</code>.
+            </p>
+            <input type="text" id="devToken" placeholder="eyJ0eXAiOiJKV1QiLCJhbGciOiJFUzI1NiIsImtpZCI6...">
+        </div>
+
+        <div class="step">
+            <span class="step-number">2</span>
+            <strong>Initialize MusicKit</strong>
+            <br>
+            <button id="initBtn" onclick="initMusicKit()">Initialize</button>
+            <span id="initStatus"></span>
+        </div>
+
+        <div class="step">
+            <span class="step-number">3</span>
+            <strong>Authorize with Apple Music</strong>
+            <p style="margin: 10px 0; color: #86868b; font-size: 14px;">
+                This will open a popup to sign in with the Apple ID that has the Apple Music subscription.
+            </p>
+            <button id="authBtn" onclick="authorize()" disabled>Authorize</button>
+        </div>
+
+        <div id="result"></div>
+    </div>
+
+    <script>
+        let music = null;
+
+        async function initMusicKit() {
+            const devToken = document.getElementById('devToken').value.trim();
+            if (!devToken) {
+                alert('Please enter your Developer Token first');
+                return;
+            }
+
+            try {
+                document.getElementById('initStatus').textContent = ' Initializing...';
+
+                await MusicKit.configure({
+                    developerToken: devToken,
+                    app: {
+                        name: 'Headless Curator',
+                        build: '1.0.0'
+                    }
+                });
+
+                music = MusicKit.getInstance();
+                document.getElementById('initStatus').innerHTML = ' <span class="success">Ready!</span>';
+                document.getElementById('authBtn').disabled = false;
+
+            } catch (error) {
+                document.getElementById('initStatus').innerHTML = ` <span class="error">Error: ${error.message}</span>`;
+                console.error('MusicKit init error:', error);
+            }
+        }
+
+        async function authorize() {
+            if (!music) {
+                alert('Please initialize MusicKit first');
+                return;
+            }
+
+            try {
+                const userToken = await music.authorize();
+
+                document.getElementById('result').innerHTML = `
+                    <h3 class="success">Authorization Successful!</h3>
+                    <p>Copy this Music User Token and paste it when running <code>curator auth</code>:</p>
+                    <div class="token-box" id="tokenBox">${userToken}</div>
+                    <button class="copy-btn" onclick="copyToken()">Copy Token</button>
+                `;
+
+            } catch (error) {
+                document.getElementById('result').innerHTML = `
+                    <h3 class="error">Authorization Failed</h3>
+                    <p>${error.message}</p>
+                `;
+                console.error('Authorization error:', error);
+            }
+        }
+
+        function copyToken() {
+            const tokenBox = document.getElementById('tokenBox');
+            navigator.clipboard.writeText(tokenBox.textContent).then(() => {
+                alert('Token copied to clipboard!');
+            });
+        }
+    </script>
+</body>
+</html>
