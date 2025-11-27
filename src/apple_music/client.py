@@ -227,16 +227,34 @@ class AppleMusicClient:
         Returns:
             List of related artists
         """
+        # Try fetching artist with similar-artists view
         try:
             data = await self._request(
                 "GET",
-                f"/catalog/{self.storefront}/artists/{artist_id}/related-artists",
+                f"/catalog/{self.storefront}/artists/{artist_id}",
+                params={"views": "similar-artists"},
+            )
+            if data.get("data"):
+                artist_data = data["data"][0]
+                views = artist_data.get("views", {})
+                similar = views.get("similar-artists", {}).get("data", [])
+                if similar:
+                    return [Artist(**a) for a in similar[:limit]]
+        except AppleMusicError as e:
+            logger.debug("similar_artists_view_error", artist_id=artist_id, error=str(e))
+
+        # Fallback: try the direct relationship endpoint
+        try:
+            data = await self._request(
+                "GET",
+                f"/catalog/{self.storefront}/artists/{artist_id}/similar-artists",
                 params={"limit": limit},
             )
             if data.get("data"):
                 return [Artist(**a) for a in data["data"]]
         except AppleMusicError as e:
             logger.warning("related_artists_error", artist_id=artist_id, error=str(e))
+
         return []
 
     async def get_artist_top_songs(
@@ -344,6 +362,32 @@ class AppleMusicClient:
                 return playlist
         return None
 
+    async def get_library_playlist_tracks(self, playlist_id: str, limit: int = 100) -> list[LibraryTrack]:
+        """Get tracks from a library playlist.
+
+        Args:
+            playlist_id: Library playlist ID
+            limit: Maximum tracks to return
+
+        Returns:
+            List of library tracks in the playlist
+        """
+        try:
+            data = await self._request(
+                "GET",
+                f"/me/library/playlists/{playlist_id}/tracks",
+                params={"limit": limit},
+                require_user_token=True,
+            )
+
+            tracks = []
+            for item in data.get("data", []):
+                tracks.append(LibraryTrack(**item))
+            return tracks
+        except Exception as e:
+            logger.warning("get_playlist_tracks_error", playlist_id=playlist_id, error=str(e))
+            return []
+
     async def create_library_playlist(
         self,
         name: str,
@@ -405,6 +449,72 @@ class AppleMusicClient:
             return True
         except AppleMusicError as e:
             logger.warning("playlist_delete_failed", playlist_id=playlist_id, error=str(e))
+            return False
+
+    async def add_tracks_to_library_playlist(
+        self,
+        playlist_id: str,
+        track_ids: list[str],
+    ) -> None:
+        """Add tracks to a library playlist.
+
+        Args:
+            playlist_id: Library playlist ID
+            track_ids: List of catalog track IDs to add
+        """
+        payload = {
+            "data": [{"id": tid, "type": "songs"} for tid in track_ids],
+        }
+
+        await self._request(
+            "POST",
+            f"/me/library/playlists/{playlist_id}/tracks",
+            json=payload,
+            require_user_token=True,
+        )
+
+        logger.info(
+            "tracks_added_to_playlist",
+            playlist_id=playlist_id,
+            track_count=len(track_ids),
+        )
+
+    async def remove_track_from_library_playlist(
+        self,
+        playlist_id: str,
+        library_track_id: str,
+    ) -> bool:
+        """Remove a track from a library playlist.
+
+        Uses DELETE with query parameter as discovered from Apple's web interface.
+
+        Args:
+            playlist_id: Library playlist ID (e.g., p.XXXXX)
+            library_track_id: Library track ID (e.g., i.XXXXX)
+
+        Returns:
+            True if removed successfully
+        """
+        try:
+            await self._request(
+                "DELETE",
+                f"/me/library/playlists/{playlist_id}/tracks",
+                params={"ids[library-songs]": library_track_id, "mode": "all"},
+                require_user_token=True,
+            )
+            logger.info(
+                "track_removed_from_playlist",
+                playlist_id=playlist_id,
+                track_id=library_track_id,
+            )
+            return True
+        except AppleMusicError as e:
+            logger.warning(
+                "track_removal_failed",
+                playlist_id=playlist_id,
+                track_id=library_track_id,
+                error=str(e),
+            )
             return False
 
     async def replace_playlist_tracks(

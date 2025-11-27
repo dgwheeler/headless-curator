@@ -8,13 +8,33 @@ from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from src.apple_music import AppleMusicAuth, AppleMusicClient, Track
-from src.applescript import MusicApp, LibrarySong
+from src.apple_music.client import AuthenticationError
 from src.database import Repository
 from src.musicbrainz import MusicBrainzClient
 from src.utils.config import Settings
 from src.utils.logging import get_logger
+from src.utils.notifications import send_auth_failure_email
 
 logger = get_logger(__name__)
+
+# Patterns to strip from song names when checking for duplicates
+NORMALIZE_PATTERNS = [
+    r"\s*\(.*?(remix|acoustic|live|radio edit|edit|version|remaster|deluxe|bonus|explicit|clean|instrumental|extended|single|album|original|mix|feat\.?|ft\.?).*?\)\s*",
+    r"\s*\[.*?(remix|acoustic|live|radio edit|edit|version|remaster|deluxe|bonus|explicit|clean|instrumental|extended|single|album|original|mix|feat\.?|ft\.?).*?\]\s*",
+    r"\s*-\s*(remix|acoustic|live|radio edit|edit|remaster|remastered).*$",
+]
+
+
+def normalize_song_name(name: str) -> str:
+    """Normalize song name for duplicate detection.
+
+    Strips common suffixes like (Remix), (Acoustic Version), [Live], etc.
+    """
+    import re
+    normalized = name.lower().strip()
+    for pattern in NORMALIZE_PATTERNS:
+        normalized = re.sub(pattern, "", normalized, flags=re.IGNORECASE)
+    return normalized.strip()
 
 
 class PlaylistCategory:
@@ -30,17 +50,19 @@ class PlaylistCategory:
 class TrackInfo:
     """Minimal track info for playlist building."""
 
+    id: str
     name: str
     artist_name: str
     album_name: str = ""
-    apple_music_id: str | None = None
 
 
 class Curator:
     """Main playlist curation engine.
 
-    Uses Apple Music API (developer token only) for catalog searches,
-    and AppleScript for library operations and playlist management.
+    Uses Apple Music API for all operations including:
+    - Catalog searches (artist discovery, top songs)
+    - Library access (favorites, heard detection)
+    - Playlist management (create, update)
     """
 
     def __init__(
@@ -51,7 +73,7 @@ class Curator:
         self.settings = settings
         self.repository = repository
 
-        # Initialize API clients (catalog-only, no user token needed)
+        # Initialize API clients
         self.auth = AppleMusicAuth(
             team_id=settings.apple_music.team_id,
             key_id=settings.apple_music.key_id,
@@ -63,22 +85,11 @@ class Curator:
         )
         self.musicbrainz = MusicBrainzClient()
 
-        # AppleScript interface for local Music app
-        self.music_app = MusicApp()
-
     async def close(self) -> None:
         """Clean up resources."""
         await self.apple_music.close()
         await self.musicbrainz.close()
         await self.repository.close()
-
-    def _get_library_songs(self) -> list[LibrarySong]:
-        """Get songs from local Music library via AppleScript.
-
-        Returns:
-            List of library songs with play counts
-        """
-        return self.music_app.get_library_songs(limit=2000)
 
     async def discover_artists(self) -> list[str]:
         """Discover new artists based on seed artists.
@@ -112,7 +123,7 @@ class Curator:
             for artist_id in seed_artist_ids:
                 discovered_artist_ids.add(artist_id)
 
-            # Try to get related artists for each seed (may fail on some APIs)
+            # Try to get related artists for each seed (may fail without user token)
             for artist_id in seed_artist_ids:
                 related = await self.apple_music.get_related_artists(artist_id, limit=15)
                 for artist in related:
@@ -123,35 +134,43 @@ class Curator:
                         name=artist.name,
                     )
 
-        # Filter through MusicBrainz
-        artist_names = []
-        for artist_id in discovered_artist_ids:
+        # Filter only NON-SEED artists through MusicBrainz
+        # Seed artists are always included - user explicitly chose them
+        seed_artist_ids_set = set(seed_artist_ids)
+        non_seed_ids = discovered_artist_ids - seed_artist_ids_set
+
+        artist_names_to_filter = []
+        for artist_id in non_seed_ids:
             artist = await self.repository.get_artist_by_apple_id(artist_id)
             if artist:
-                artist_names.append(artist.name)
+                artist_names_to_filter.append(artist.name)
 
         async with self.musicbrainz:
             filtered_names = await self.musicbrainz.filter_artists_by_criteria(
-                artist_names,
-                gender=self.settings.filters.gender,
+                artist_names_to_filter,
                 countries=self.settings.filters.countries,
                 min_release_year=self.settings.filters.min_release_year,
             )
 
-        # Map back to Apple Music IDs
+        # Map filtered names back to Apple Music IDs
         filtered_ids = []
         for name in filtered_names:
             artist = await self.repository.get_artist_by_name(name)
             if artist:
                 filtered_ids.append(artist.apple_music_id)
 
+        # Always include seed artists (they bypass MusicBrainz filter)
+        final_ids = list(seed_artist_ids_set) + [aid for aid in filtered_ids if aid not in seed_artist_ids_set]
+
         logger.info(
             "artist_discovery_complete",
-            discovered=len(discovered_artist_ids),
+            seeds=len(seed_artist_ids),
+            discovered=len(non_seed_ids),
             filtered=len(filtered_ids),
+            total=len(final_ids),
         )
 
-        return filtered_ids
+        return final_ids
 
     async def collect_tracks(self, artist_ids: list[str]) -> dict[str, list[TrackInfo]]:
         """Collect tracks from discovered artists.
@@ -173,11 +192,15 @@ class Curator:
         now = datetime.now(timezone.utc)
         wildcard_cutoff = now - timedelta(days=self.settings.algorithm.new_release_days)
 
-        # Get library tracks for "heard" detection via AppleScript
-        library_songs = self._get_library_songs()
-        library_keys = {f"{s.artist.lower()}:{s.name.lower()}" for s in library_songs}
-
         async with self.apple_music:
+            # Get library tracks for "heard" detection
+            library_tracks = await self.apple_music.get_all_library_songs()
+            library_keys = {
+                f"{t.attributes.artist_name.lower()}:{t.name.lower()}"
+                for t in library_tracks
+                if t.attributes
+            }
+
             for artist_id in artist_ids:
                 top_songs = await self.apple_music.get_artist_top_songs(artist_id, limit=10)
 
@@ -196,10 +219,10 @@ class Curator:
                     is_known = track_key in library_keys
 
                     track_info = TrackInfo(
+                        id=track.id,
                         name=track.name,
                         artist_name=track.artist_name,
                         album_name=track.album_name,
-                        apple_music_id=track.id,
                     )
 
                     if track.attributes.release_datetime and track.attributes.release_datetime >= wildcard_cutoff:
@@ -232,23 +255,49 @@ class Curator:
 
         return tracks_by_category
 
-    def get_favorites(self) -> list[TrackInfo]:
-        """Get favorite tracks based on play counts from local library.
+    async def get_favorites(self, artist_ids: list[str]) -> list[TrackInfo]:
+        """Get favorite tracks from discovered artists based on play counts.
+
+        Args:
+            artist_ids: List of Apple Music artist IDs to filter by
 
         Returns:
-            List of most-played tracks
+            List of most-played tracks from discovered artists
         """
-        library_songs = self._get_library_songs()
+        # Get artist names for filtering
+        artist_names_lower = set()
+        for artist_id in artist_ids:
+            artist = await self.repository.get_artist_by_apple_id(artist_id)
+            if artist:
+                artist_names_lower.add(artist.name.lower())
 
-        # Already sorted by play count (descending) from MusicApp
-        favorites = []
-        for song in library_songs[:50]:
-            if song.play_count > 0:
-                favorites.append(TrackInfo(
-                    name=song.name,
-                    artist_name=song.artist,
-                    album_name=song.album,
-                ))
+        async with self.apple_music:
+            library_tracks = await self.apple_music.get_all_library_songs()
+
+            # Filter to only tracks from discovered artists and sort by play count
+            matching_tracks = []
+            for track in library_tracks:
+                if not track.attributes:
+                    continue
+                if track.attributes.artist_name.lower() in artist_names_lower:
+                    matching_tracks.append(track)
+
+            sorted_tracks = sorted(
+                matching_tracks,
+                key=lambda t: t.play_count,
+                reverse=True,
+            )
+
+            # Convert to TrackInfo
+            favorites = []
+            for lt in sorted_tracks[:50]:
+                if lt.attributes and lt.play_count > 0:
+                    favorites.append(TrackInfo(
+                        id=lt.id,
+                        name=lt.name,
+                        artist_name=lt.attributes.artist_name,
+                        album_name=lt.attributes.album_name,
+                    ))
 
         logger.info("favorites_collected", count=len(favorites))
         return favorites
@@ -286,36 +335,6 @@ class Curator:
                     weight=new_weight,
                 )
 
-        # Boost tracks with positive signals from library play counts
-        library_songs = self._get_library_songs()
-
-        for song in library_songs:
-            db_track = await self.repository.get_track_by_name_artist(song.name, song.artist)
-            if not db_track:
-                continue
-
-            pref = await self.repository.get_preference(db_track.id)
-            if not pref:
-                continue
-
-            # Check for play count increase
-            if song.play_count > pref.play_count:
-                plays_delta = song.play_count - pref.play_count
-                boost = 1 + (plays_delta * 0.1)  # 10% boost per play
-                new_weight = min(5.0, pref.weight * boost)
-
-                await self.repository.upsert_preference(
-                    track_id=db_track.id,
-                    play_count=song.play_count,
-                    weight=new_weight,
-                )
-                logger.debug(
-                    "positive_signal",
-                    track=db_track.name,
-                    plays_delta=plays_delta,
-                    new_weight=new_weight,
-                )
-
         logger.info("preferences_updated")
 
     def build_playlist(
@@ -324,17 +343,17 @@ class Curator:
         hits: list[TrackInfo],
         discovery: list[TrackInfo],
         wildcard: list[TrackInfo],
-    ) -> list[TrackInfo]:
+    ) -> list[str]:
         """Build the final playlist with weighted categories.
 
         Args:
-            favorites: High play count tracks
+            favorites: High play count tracks from discovered artists
             hits: Top tracks from discovered artists (known)
             discovery: Tracks from similar artists (unknown)
             wildcard: New releases
 
         Returns:
-            List of TrackInfo in interleaved order
+            List of track IDs in interleaved order
         """
         playlist_size = self.settings.algorithm.playlist_size
         weights = self.settings.algorithm.weights
@@ -354,15 +373,15 @@ class Curator:
         random.shuffle(wildcard)
 
         # Select tracks up to target for each category
-        selected: dict[str, list[TrackInfo]] = {
-            PlaylistCategory.FAVORITES: favorites[: targets[PlaylistCategory.FAVORITES]],
-            PlaylistCategory.HITS: hits[: targets[PlaylistCategory.HITS]],
-            PlaylistCategory.DISCOVERY: discovery[: targets[PlaylistCategory.DISCOVERY]],
-            PlaylistCategory.WILDCARD: wildcard[: targets[PlaylistCategory.WILDCARD]],
+        selected: dict[str, list[str]] = {
+            PlaylistCategory.FAVORITES: [t.id for t in favorites[: targets[PlaylistCategory.FAVORITES]]],
+            PlaylistCategory.HITS: [t.id for t in hits[: targets[PlaylistCategory.HITS]]],
+            PlaylistCategory.DISCOVERY: [t.id for t in discovery[: targets[PlaylistCategory.DISCOVERY]]],
+            PlaylistCategory.WILDCARD: [t.id for t in wildcard[: targets[PlaylistCategory.WILDCARD]]],
         }
 
         # Interleave tracks to avoid clustering
-        playlist: list[TrackInfo] = []
+        playlist: list[str] = []
         categories = [PlaylistCategory.FAVORITES, PlaylistCategory.HITS, PlaylistCategory.DISCOVERY, PlaylistCategory.WILDCARD]
         category_idx = 0
 
@@ -393,44 +412,77 @@ class Curator:
 
         return playlist
 
-    def create_or_update_playlist(self, tracks: list[TrackInfo]) -> str:
-        """Create playlist with tracks via AppleScript.
-
-        Deletes existing playlist if present, creates new one,
-        and adds tracks by searching in the local library.
+    async def create_or_update_playlist(self, track_ids: list[str]) -> str:
+        """Create playlist with tracks, or update existing one.
 
         Args:
-            tracks: List of TrackInfo to add
+            track_ids: List of catalog track IDs to add
 
         Returns:
-            Playlist name (used as ID for AppleScript)
+            Playlist ID
         """
         playlist_name = self.settings.user.playlist_name
-        description = f"Personalized playlist for {self.settings.user.name}, curated by Headless Curator"
 
-        # Delete existing playlist if present
-        existing = self.music_app.get_playlist(playlist_name)
-        if existing:
-            logger.info("deleting_old_playlist", name=playlist_name)
-            self.music_app.delete_playlist(playlist_name)
+        async with self.apple_music:
+            # Find all playlists with this name and pick the best one
+            all_playlists = await self.apple_music.get_library_playlists()
+            matching = [p for p in all_playlists if p.name == playlist_name]
 
-        # Create new playlist
-        self.music_app.create_playlist(playlist_name, description)
+            if matching:
+                # Use existing playlist - Apple Music API can't delete library playlists
+                # Find the one with tracks if multiple exist, otherwise use first
+                existing = matching[0]
+                existing_tracks = []
+                for p in matching:
+                    tracks = await self.apple_music.get_library_playlist_tracks(p.id)
+                    if tracks:
+                        existing = p
+                        existing_tracks = tracks
+                        break
 
-        # Add tracks by searching
-        added = 0
-        for track in tracks:
-            if self.music_app.add_track_to_playlist(playlist_name, track.name, track.artist_name):
-                added += 1
+                logger.info("reusing_existing_playlist", name=playlist_name, id=existing.id, existing_tracks=len(existing_tracks))
 
-        logger.info(
-            "playlist_created_with_tracks",
-            name=playlist_name,
-            added=added,
-            requested=len(tracks),
-        )
+                # Get existing track names to deduplicate (can't compare IDs - library vs catalog)
+                # Normalize names to catch variants like "Song (Remix)" vs "Song (Acoustic)"
+                existing_keys = set()
+                for t in existing_tracks:
+                    if t.attributes:
+                        normalized_name = normalize_song_name(t.name)
+                        key = f"{t.attributes.artist_name.lower()}:{normalized_name}"
+                        existing_keys.add(key)
 
-        return playlist_name
+                # Filter to only new tracks
+                new_track_ids = []
+                for tid in track_ids:
+                    # Look up track info from our database
+                    track = await self.repository.get_track_by_apple_id(tid)
+                    if track:
+                        normalized_name = normalize_song_name(track.name)
+                        key = f"{track.artist_name.lower()}:{normalized_name}"
+                        if key not in existing_keys:
+                            new_track_ids.append(tid)
+                            existing_keys.add(key)  # Prevent duplicates within batch
+
+                if new_track_ids:
+                    # Note: PUT (replace) requires elevated permissions that web auth doesn't grant
+                    # Using POST (add) instead
+                    await self.apple_music.add_tracks_to_library_playlist(existing.id, new_track_ids)
+                    logger.info("playlist_updated_with_tracks", name=playlist_name, id=existing.id,
+                               new_tracks=len(new_track_ids), skipped_duplicates=len(track_ids) - len(new_track_ids))
+                else:
+                    logger.info("no_new_tracks_to_add", name=playlist_name, all_duplicates=len(track_ids))
+
+                return existing.id
+            else:
+                # Create new playlist with tracks
+                playlist = await self.apple_music.create_library_playlist(
+                    name=playlist_name,
+                    description=f"Personalized playlist for {self.settings.user.name}, curated by Headless Curator",
+                    track_ids=track_ids,
+                )
+
+                logger.info("playlist_created_with_tracks", name=playlist_name, id=playlist.id, track_count=len(track_ids))
+                return playlist.id
 
     async def refresh_playlist(self) -> dict:
         """Run a full playlist refresh.
@@ -454,25 +506,25 @@ class Curator:
             # Collect tracks by category
             tracks_by_cat = await self.collect_tracks(artist_ids)
 
-            # Get favorites from user's library
-            favorites = self.get_favorites()
+            # Get favorites from discovered artists in user's library
+            favorites = await self.get_favorites(artist_ids)
 
             # Build the playlist
-            playlist_tracks = self.build_playlist(
+            playlist_track_ids = self.build_playlist(
                 favorites=favorites,
                 hits=tracks_by_cat[PlaylistCategory.HITS],
                 discovery=tracks_by_cat[PlaylistCategory.DISCOVERY],
                 wildcard=tracks_by_cat[PlaylistCategory.WILDCARD],
             )
 
-            # Create playlist with tracks via AppleScript
-            playlist_name = self.create_or_update_playlist(playlist_tracks)
+            # Create playlist with tracks (or recreate if exists)
+            playlist_id = await self.create_or_update_playlist(playlist_track_ids)
 
             # Update playlist state
             await self.repository.upsert_playlist_state(
-                playlist_id=playlist_name,
+                playlist_id=playlist_id,
                 playlist_name=self.settings.user.playlist_name,
-                track_count=len(playlist_tracks),
+                track_count=len(playlist_track_ids),
             )
 
             duration = time.time() - start_time
@@ -481,20 +533,40 @@ class Curator:
             await self.repository.log_sync(
                 sync_type="refresh",
                 status="success",
-                tracks_added=len(playlist_tracks),
+                tracks_added=len(playlist_track_ids),
                 duration_seconds=duration,
             )
 
             summary = {
                 "status": "success",
-                "playlist_name": playlist_name,
-                "track_count": len(playlist_tracks),
+                "playlist_id": playlist_id,
+                "track_count": len(playlist_track_ids),
                 "duration_seconds": round(duration, 2),
                 "artists_discovered": len(artist_ids),
             }
 
             logger.info("playlist_refresh_complete", **summary)
             return summary
+
+        except AuthenticationError as e:
+            duration = time.time() - start_time
+            logger.error("playlist_refresh_failed_auth", error=str(e))
+
+            await self.repository.log_sync(
+                sync_type="refresh",
+                status="auth_failure",
+                error_message=str(e),
+                duration_seconds=duration,
+            )
+
+            # Send email notification
+            try:
+                send_auth_failure_email(self.settings)
+                logger.info("auth_failure_email_sent")
+            except Exception as email_error:
+                logger.error("auth_failure_email_failed", error=str(email_error))
+
+            raise
 
         except Exception as e:
             duration = time.time() - start_time

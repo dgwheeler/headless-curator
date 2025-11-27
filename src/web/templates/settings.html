@@ -1,0 +1,80 @@
+{% extends "base.html" %}
+
+{% block title %}Settings - Headless Curator{% endblock %}
+
+{% block content %}
+<h1 style="margin-bottom: 30px;">Settings</h1>
+
+<form action="/settings/update" method="post">
+    <div class="card">
+        <h2>Playlist Settings</h2>
+
+        <div style="margin-bottom: 15px;">
+            <label style="display: block; margin-bottom: 5px; color: #888;">Playlist Name</label>
+            <input type="text" name="playlist_name" value="{{ settings.user.playlist_name }}" required>
+        </div>
+
+        <div style="margin-bottom: 15px;">
+            <label style="display: block; margin-bottom: 5px; color: #888;">Playlist Size</label>
+            <input type="number" name="playlist_size" value="{{ settings.algorithm.playlist_size }}" min="10" max="100" required>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Category Weights</h2>
+        <p style="color: #888; margin-bottom: 20px;">
+            Adjust how the playlist is composed. Values should sum to 1.0.
+        </p>
+
+        <div class="grid" style="grid-template-columns: repeat(2, 1fr);">
+            <div>
+                <label style="display: block; margin-bottom: 5px; color: #888;">
+                    Favorites (high play count)
+                </label>
+                <input type="number" name="weight_favorites" value="{{ settings.algorithm.weights.favorites }}" step="0.05" min="0" max="1" required>
+            </div>
+            <div>
+                <label style="display: block; margin-bottom: 5px; color: #888;">
+                    Hits (known top tracks)
+                </label>
+                <input type="number" name="weight_hits" value="{{ settings.algorithm.weights.hits }}" step="0.05" min="0" max="1" required>
+            </div>
+            <div>
+                <label style="display: block; margin-bottom: 5px; color: #888;">
+                    Discovery (new artists)
+                </label>
+                <input type="number" name="weight_discovery" value="{{ settings.algorithm.weights.discovery }}" step="0.05" min="0" max="1" required>
+            </div>
+            <div>
+                <label style="display: block; margin-bottom: 5px; color: #888;">
+                    Wildcard (new releases)
+                </label>
+                <input type="number" name="weight_wildcard" value="{{ settings.algorithm.weights.wildcard }}" step="0.05" min="0" max="1" required>
+            </div>
+        </div>
+    </div>
+
+    <div class="card">
+        <h2>Current Filters</h2>
+        <p style="color: #888; margin-bottom: 15px;">
+            These filters are applied during artist discovery. Edit config.yaml directly to change.
+        </p>
+
+        <div style="display: grid; grid-template-columns: repeat(2, 1fr); gap: 15px;">
+            <div>
+                <div style="color: #888; font-size: 0.85rem;">Countries</div>
+                <div>{{ settings.filters.countries | join(', ') }}</div>
+            </div>
+            <div>
+                <div style="color: #888; font-size: 0.85rem;">Min Release Year</div>
+                <div>{{ settings.filters.min_release_year }}</div>
+            </div>
+        </div>
+    </div>
+
+    <div style="margin-top: 20px;">
+        <button type="submit" class="btn">Save Settings</button>
+        <a href="/" class="btn btn-secondary" style="margin-left: 10px;">Cancel</a>
+    </div>
+</form>
+{% endblock %}

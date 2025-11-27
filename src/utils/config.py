@@ -26,7 +26,6 @@ class SeedsConfig(BaseModel):
 class FiltersConfig(BaseModel):
     """Filtering criteria for artist discovery."""
 
-    gender: str = "Male"
     countries: list[str] = Field(default_factory=lambda: ["GB", "US", "IE", "AU", "CA"])
     min_release_year: int = 2020
 
@@ -90,6 +89,19 @@ class DatabaseConfig(BaseModel):
         return f"sqlite+aiosqlite:///{self.path}"
 
 
+class EmailConfig(BaseModel):
+    """Email notification configuration."""
+
+    enabled: bool = False
+    smtp_host: str = "smtp.gmail.com"
+    smtp_port: int = 587
+    smtp_use_tls: bool = True
+    smtp_username: str = ""
+    smtp_password: str = ""  # Use app password for Gmail
+    sender: str = ""  # Defaults to smtp_username if not set
+    recipient: str = ""  # Email address to notify
+
+
 class Settings(BaseSettings):
     """Main application settings."""
 
@@ -105,6 +117,7 @@ class Settings(BaseSettings):
     schedule: ScheduleConfig = Field(default_factory=ScheduleConfig)
     apple_music: AppleMusicConfig = Field(default_factory=AppleMusicConfig)
     database: DatabaseConfig = Field(default_factory=DatabaseConfig)
+    email: EmailConfig = Field(default_factory=EmailConfig)
 
 
 def load_config(config_path: Path | str = "config.yaml") -> Settings:

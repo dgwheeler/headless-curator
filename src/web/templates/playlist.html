@@ -1,0 +1,142 @@
+{% extends "base.html" %}
+
+{% block title %}Playlist - Headless Curator{% endblock %}
+
+{% block content %}
+<h1 style="margin-bottom: 30px;">{{ playlist_name }}</h1>
+
+{% if not auth_status.valid %}
+<div class="alert alert-warning">
+    <strong>Authentication Required:</strong> {{ auth_status.message }}
+    <br>Run <code>curator auth</code> in terminal to view playlist tracks.
+</div>
+{% elif error_message %}
+<div class="alert alert-warning">
+    <strong>Error loading playlist:</strong> {{ error_message }}
+</div>
+{% endif %}
+
+<div class="card">
+    <h2>Add Track</h2>
+    <p style="color: #888; margin-bottom: 15px;">Search Apple Music to add a track to the playlist.</p>
+
+    <div class="add-form">
+        <input type="text" id="search-input" placeholder="Search for a song..." onkeyup="debounceSearch(this.value)">
+    </div>
+
+    <div id="search-results" style="margin-top: 15px;"></div>
+</div>
+
+<div class="card">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+        <h2 style="margin-bottom: 0;">Current Tracks ({{ tracks | length }})</h2>
+        <a href="https://music.apple.com/library/playlists" target="_blank" class="btn btn-secondary" style="padding: 5px 12px; font-size: 0.85rem;">Manage in Apple Music ↗</a>
+    </div>
+
+    {% if tracks %}
+    <table>
+        <thead>
+            <tr>
+                <th>#</th>
+                <th>Title</th>
+                <th>Artist</th>
+                <th>Album</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for track in tracks %}
+            <tr>
+                <td style="color: #888;">{{ loop.index }}</td>
+                <td>{{ track.name }}</td>
+                <td style="color: #888;">{{ track.artist }}</td>
+                <td style="color: #666; font-size: 0.9rem;">{{ track.album }}</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    <p style="color: #666; font-size: 0.85rem; margin-top: 15px;">
+        To remove tracks, use <a href="https://music.apple.com" target="_blank">music.apple.com</a> or the Music app.
+        (Apple's API doesn't allow third-party apps to remove tracks.)
+    </p>
+    {% else %}
+    <p style="color: #888;">No tracks found. {% if not auth_status.valid %}Authenticate to view tracks.{% endif %}</p>
+    {% endif %}
+</div>
+
+<div style="margin-top: 20px;">
+    <a href="/" class="btn btn-secondary">Back to Dashboard</a>
+</div>
+
+<script>
+let searchTimeout;
+
+function debounceSearch(query) {
+    clearTimeout(searchTimeout);
+    if (query.length < 2) {
+        document.getElementById('search-results').innerHTML = '';
+        return;
+    }
+    searchTimeout = setTimeout(() => searchTracks(query), 300);
+}
+
+async function searchTracks(query) {
+    const resultsDiv = document.getElementById('search-results');
+    resultsDiv.innerHTML = '<p style="color: #888;">Searching...</p>';
+
+    try {
+        const response = await fetch(`/api/search?q=${encodeURIComponent(query)}`);
+        const data = await response.json();
+
+        if (data.status === 'success' && data.tracks.length > 0) {
+            let html = '<table><thead><tr><th>Title</th><th>Artist</th><th>Album</th><th></th></tr></thead><tbody>';
+            for (const track of data.tracks) {
+                html += `<tr>
+                    <td>${track.name}</td>
+                    <td style="color: #888;">${track.artist}</td>
+                    <td style="color: #666; font-size: 0.9rem;">${track.album}</td>
+                    <td><button class="btn" onclick="addTrack('${track.id}', this)">Add</button></td>
+                </tr>`;
+            }
+            html += '</tbody></table>';
+            resultsDiv.innerHTML = html;
+        } else if (data.status === 'success') {
+            resultsDiv.innerHTML = '<p style="color: #888;">No results found.</p>';
+        } else {
+            resultsDiv.innerHTML = `<p style="color: #dc3545;">Error: ${data.message}</p>`;
+        }
+    } catch (e) {
+        resultsDiv.innerHTML = `<p style="color: #dc3545;">Error: ${e.message}</p>`;
+    }
+}
+
+async function addTrack(trackId, btn) {
+    btn.disabled = true;
+    btn.textContent = 'Adding...';
+
+    try {
+        const formData = new FormData();
+        formData.append('track_id', trackId);
+
+        const response = await fetch('/playlist/add', {
+            method: 'POST',
+            body: formData
+        });
+        const data = await response.json();
+
+        if (data.status === 'success') {
+            btn.textContent = 'Added!';
+            btn.style.background = '#28a745';
+            setTimeout(() => location.reload(), 1000);
+        } else {
+            btn.textContent = 'Error';
+            btn.style.background = '#dc3545';
+            alert('Error: ' + data.message);
+        }
+    } catch (e) {
+        btn.textContent = 'Error';
+        btn.style.background = '#dc3545';
+        alert('Error: ' + e.message);
+    }
+}
+</script>
+{% endblock %}

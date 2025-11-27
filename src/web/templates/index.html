@@ -1,0 +1,112 @@
+{% extends "base.html" %}
+
+{% block title %}Dashboard - Headless Curator{% endblock %}
+
+{% block content %}
+<h1 style="margin-bottom: 30px;">Dashboard</h1>
+
+{% if not auth_status.valid %}
+<div class="alert alert-warning">
+    <strong>Authentication Required:</strong> {{ auth_status.message }}
+    <br>Run <code>curator auth</code> in terminal to re-authenticate.
+    <a href="/auth" class="btn btn-secondary" style="margin-left: 15px;">View Auth Status</a>
+</div>
+{% endif %}
+
+<div class="card">
+    <h2>{{ settings.user.playlist_name }}</h2>
+    <p style="color: #888; margin-bottom: 20px;">Playlist for {{ settings.user.name }}</p>
+
+    <div class="grid">
+        <div class="stat">
+            <div class="stat-value">{{ playlist_state.track_count if playlist_state else 0 }}</div>
+            <div class="stat-label">Tracks</div>
+        </div>
+        <div class="stat">
+            <div class="stat-value">{{ stats.artists }}</div>
+            <div class="stat-label">Artists</div>
+        </div>
+        <div class="stat">
+            <div class="stat-value">{{ settings.seeds.artists | length }}</div>
+            <div class="stat-label">Seed Artists</div>
+        </div>
+        <div class="stat">
+            <div class="stat-value {% if auth_status.valid %}status-ok{% else %}status-error{% endif %}">
+                {% if auth_status.valid %}OK{% else %}!{% endif %}
+            </div>
+            <div class="stat-label">Auth Status</div>
+        </div>
+    </div>
+
+    <div style="margin-top: 20px; text-align: center;">
+        <button id="refresh-btn" class="btn" onclick="triggerRefresh()">Refresh Now</button>
+    </div>
+</div>
+
+<div class="card">
+    <div style="display: flex; justify-content: space-between; align-items: center; margin-bottom: 15px;">
+        <h2 style="margin-bottom: 0;">Recent Activity</h2>
+        {% if sync_logs %}
+        <button class="btn btn-secondary" onclick="clearLogs()" style="padding: 5px 12px; font-size: 0.85rem;">Clear Logs</button>
+        {% endif %}
+    </div>
+    {% if sync_logs %}
+    <table>
+        <thead>
+            <tr>
+                <th>Time</th>
+                <th>Type</th>
+                <th>Status</th>
+                <th>Tracks</th>
+                <th>Duration</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for log in sync_logs %}
+            <tr>
+                <td>{{ log.created_at.strftime('%Y-%m-%d %H:%M') }}</td>
+                <td>{{ log.sync_type }}</td>
+                <td class="{% if log.status == 'success' %}status-ok{% else %}status-error{% endif %}">
+                    {{ log.status }}
+                </td>
+                <td>{{ log.tracks_added }}</td>
+                <td>{{ "%.1f"|format(log.duration_seconds) }}s</td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+    {% else %}
+    <p style="color: #888;">No sync activity yet.</p>
+    {% endif %}
+</div>
+
+<script>
+async function clearLogs() {
+    if (!confirm('Clear all sync logs?')) return;
+
+    try {
+        const response = await fetch('/api/logs/clear', { method: 'POST' });
+        const data = await response.json();
+        if (data.status === 'success') {
+            location.reload();
+        } else {
+            alert('Error: ' + data.message);
+        }
+    } catch (e) {
+        alert('Error: ' + e.message);
+    }
+}
+</script>
+
+<div class="card">
+    <h2>Seed Artists</h2>
+    <div style="margin-top: 10px;">
+        {% for artist in settings.seeds.artists %}
+        <span class="tag">{{ artist }}</span>
+        {% endfor %}
+    </div>
+    <div style="margin-top: 15px;">
+        <a href="/artists" class="btn btn-secondary">Manage Artists</a>
+    </div>
+</div>
+{% endblock %}

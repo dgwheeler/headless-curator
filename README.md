@@ -17,9 +17,79 @@ The target user (e.g., "Grace") simply sees a playlist called "Grace's Station" 
 ## Requirements
 
 - macOS Sonoma or later
-- Python 3.12+
+- Python 3.11+
 - Apple Developer Account with MusicKit enabled
 - Mac that stays on (e.g., Mac Studio, Mac mini)
+
+## Quick Start
+
+```bash
+# Clone and install
+git clone https://github.com/yourusername/headless-curator.git
+cd headless-curator
+python3 -m venv .venv
+source .venv/bin/activate
+pip install -e .
+
+# Configure (edit config.yaml with your settings)
+cp config.yaml.example config.yaml
+
+# Authenticate with Apple Music
+curator auth
+
+# Test with a manual refresh
+curator refresh
+
+# Install as background service
+curator install-service
+```
+
+## Managing Curator
+
+### Web Interface
+
+The easiest way to manage Curator is through the web interface:
+
+```bash
+curator web --port 3030
+```
+
+Then open **http://127.0.0.1:8080** in your browser.
+
+The web interface provides:
+- **Dashboard** - View playlist stats, authentication status, recent sync activity, and trigger manual refreshes
+- **Artists** - Add or remove seed artists and songs
+- **Settings** - Adjust playlist size and category weights
+- **Auth** - Check authentication status and see re-auth instructions
+
+### CLI Commands
+
+```bash
+# Start web management interface
+curator web
+curator web --port 8181  # Custom port
+
+# Authenticate with Apple Music
+curator auth
+
+# Manually trigger a playlist refresh
+curator refresh
+curator refresh --verbose  # Debug mode
+
+# Manage seed artists
+curator add-seed --artist "Ed Sheeran"
+curator remove-seed --artist "Ed Sheeran"
+
+# Show current status
+curator status
+
+# Run as a daemon (foreground)
+curator serve
+
+# macOS service management
+curator install-service
+curator uninstall-service
+```
 
 ## Installation
 
@@ -57,14 +127,19 @@ chmod 600 ~/.secrets/apple_music_key.p8
 
 ### 3. Configure Environment
 
-Set your Apple credentials as environment variables:
+Add to your `~/.zshrc`:
 
 ```bash
+# Apple Music API credentials
 export APPLE_TEAM_ID="YOUR_TEAM_ID"
 export APPLE_KEY_ID="YOUR_KEY_ID"
+
+# Email notifications (optional - for auth failure alerts)
+export CURATOR_EMAIL_USER="your_email@icloud.com"
+export CURATOR_APP_PASSWORD="your-app-specific-password"
 ```
 
-Or add them to your shell profile (`~/.zshrc` or `~/.bashrc`).
+For email notifications via iCloud, generate an app-specific password at [appleid.apple.com](https://appleid.apple.com) under Sign-In & Security > App-Specific Passwords.
 
 ### 4. Create Configuration
 
@@ -77,96 +152,21 @@ Edit `config.yaml` to customize:
 - Seed artists
 - Filter criteria
 - Schedule
+- Email notification settings
 
 ### 5. Authenticate
 
-Run the authentication command to set up the user token:
+Run the authentication command:
 
 ```bash
 curator auth
 ```
 
-This will guide you through obtaining a Music User Token via Apple's MusicKit JS OAuth flow.
+This opens `auth_helper.html` in your browser. The target user (e.g., Grace) must sign in with **their** Apple ID to authorize access to their Apple Music library.
 
-#### Getting the User Token
+**Important:** The user token will eventually expire. When this happens, Curator will send an email notification (if configured) and you'll need to run `curator auth` again.
 
-Since Apple Music requires user authorization via a web-based flow, you'll need to:
-
-1. Create a simple HTML page with MusicKit JS
-2. Host it locally or use a tool like `python -m http.server`
-3. Initialize MusicKit with your developer token
-4. Call `music.authorize()` to trigger the OAuth popup
-5. Copy the returned user token
-
-Example HTML for token retrieval:
-
-```html
-<!DOCTYPE html>
-<html>
-<head>
-    <title>Apple Music Auth</title>
-    <script src="https://js-cdn.music.apple.com/musickit/v1/musickit.js"></script>
-</head>
-<body>
-    <button id="auth">Authorize Apple Music</button>
-    <pre id="token"></pre>
-    <script>
-        document.addEventListener('musickitloaded', async () => {
-            await MusicKit.configure({
-                developerToken: 'YOUR_DEVELOPER_TOKEN_HERE',
-                app: {
-                    name: 'Headless Curator',
-                    build: '1.0.0'
-                }
-            });
-
-            document.getElementById('auth').onclick = async () => {
-                const music = MusicKit.getInstance();
-                const token = await music.authorize();
-                document.getElementById('token').textContent = token;
-            };
-        });
-    </script>
-</body>
-</html>
-```
-
-After getting the token, paste it when prompted by `curator auth`.
-
-## Usage
-
-### CLI Commands
-
-```bash
-# Authenticate with Apple Music
-curator auth
-
-# Manually trigger a playlist refresh
-curator refresh
-
-# Verbose refresh (for debugging)
-curator refresh --verbose
-
-# Add a seed artist
-curator add-seed --artist "Ed Sheeran"
-
-# Remove a seed artist
-curator remove-seed --artist "Ed Sheeran"
-
-# Show current status
-curator status
-
-# Run as a daemon (foreground)
-curator serve
-
-# Install as a macOS service (launchd)
-curator install-service
-
-# Uninstall the macOS service
-curator uninstall-service
-```
-
-### Running as a Service
+## Running as a Service
 
 For 24/7 operation, install as a launchd service:
 
@@ -199,6 +199,23 @@ To uninstall:
 ```bash
 curator uninstall-service
 ```
+
+## Email Notifications
+
+Curator can send email notifications when authentication expires. Configure in `config.yaml`:
+
+```yaml
+email:
+  enabled: true
+  smtp_host: "smtp.mail.me.com"  # iCloud SMTP
+  smtp_port: 587
+  smtp_use_tls: true
+  smtp_username: "${CURATOR_EMAIL_USER}"
+  smtp_password: "${CURATOR_APP_PASSWORD}"
+  recipient: "your_email@example.com"
+```
+
+When the Apple Music user token expires, you'll receive an email with instructions to re-authenticate.
 
 ## How It Works
 
@@ -237,7 +254,7 @@ The curator learns from listening behavior:
 4. Filter by:
    - Gender (e.g., Male only)
    - Country (e.g., UK, US, Ireland, etc.)
-   - Recent releases (>= 2020)
+   - Recent releases (>= configured year)
 
 ## Configuration Reference
 
@@ -245,7 +262,6 @@ The curator learns from listening behavior:
 user:
   name: "Grace"                    # User's name
   playlist_name: "Grace's Station" # Playlist name in Apple Music
-  playlist_id: null                # Auto-populated after first run
 
 seeds:
   artists:                         # Seed artists for discovery
@@ -254,9 +270,9 @@ seeds:
   songs: []                        # Seed songs (optional)
 
 filters:
-  gender: "Male"                   # MusicBrainz gender filter
+  gender: "Male"                   # MusicBrainz gender filter (or omit for any)
   countries: ["GB", "US", "IE"]    # ISO country codes
-  min_release_year: 2020           # Only artists with recent releases
+  min_release_year: 2012           # Only artists with releases since this year
 
 algorithm:
   playlist_size: 50                # Total tracks in playlist
@@ -282,34 +298,15 @@ apple_music:
 
 database:
   path: "curator.db"               # SQLite database file
-```
 
-## Development
-
-### Running Tests
-
-```bash
-# Run all tests
-pytest
-
-# Run with coverage
-pytest --cov=src --cov-report=term-missing
-
-# Run specific test file
-pytest tests/test_curator.py -v
-```
-
-### Type Checking
-
-```bash
-mypy src
-```
-
-### Linting
-
-```bash
-ruff check src tests
-ruff format src tests
+email:
+  enabled: false                   # Set true to enable notifications
+  smtp_host: "smtp.mail.me.com"
+  smtp_port: 587
+  smtp_use_tls: true
+  smtp_username: "${CURATOR_EMAIL_USER}"
+  smtp_password: "${CURATOR_APP_PASSWORD}"
+  recipient: ""                    # Email to notify on auth failure
 ```
 
 ## Troubleshooting
@@ -340,6 +337,38 @@ The MusicBrainz client includes rate limiting (1 request/second) and caching (30
 3. Verify the playlist exists in Apple Music
 4. Check that the user token is still valid
 
+### Re-authentication Required
+
+Apple Music user tokens expire periodically. When this happens:
+
+1. You'll receive an email notification (if configured)
+2. The web interface will show "Authentication Required"
+3. Run `curator auth` to re-authenticate
+4. The playlist will continue working, but won't update until re-authenticated
+
+## Development
+
+### Running Tests
+
+```bash
+pytest
+pytest --cov=src --cov-report=term-missing
+pytest tests/test_curator.py -v
+```
+
+### Type Checking
+
+```bash
+mypy src
+```
+
+### Linting
+
+```bash
+ruff check src tests
+ruff format src tests
+```
+
 ## License
 
 MIT License - see LICENSE file for details.
@@ -347,6 +376,7 @@ MIT License - see LICENSE file for details.
 ## Credits
 
 Built with:
+- [FastAPI](https://fastapi.tiangolo.com/) - Web framework
 - [httpx](https://www.python-httpx.org/) - Async HTTP client
 - [Pydantic](https://docs.pydantic.dev/) - Data validation
 - [APScheduler](https://apscheduler.readthedocs.io/) - Task scheduling

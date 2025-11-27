@@ -424,5 +424,36 @@ def uninstall_service() -> None:
         rprint(f"[green]✓[/green] Plist removed from {plist_path}")
 
 
+@app.command()
+def web(
+    config: Annotated[
+        Optional[Path],
+        typer.Option("--config", "-c", help="Path to configuration file"),
+    ] = None,
+    host: Annotated[
+        str,
+        typer.Option("--host", "-h", help="Host to bind to"),
+    ] = "127.0.0.1",
+    port: Annotated[
+        int,
+        typer.Option("--port", "-p", help="Port to listen on"),
+    ] = 8080,
+) -> None:
+    """Start the web management interface."""
+    config_path = get_config_path(config)
+
+    rprint(f"\n[bold blue]Starting Headless Curator Web Interface[/bold blue]\n")
+    rprint(f"Config: {config_path}")
+    rprint(f"URL: [cyan]http://{host}:{port}[/cyan]")
+    rprint("\nPress Ctrl+C to stop\n")
+
+    from src.web.app import run_server
+
+    try:
+        run_server(host=host, port=port, config_path=str(config_path))
+    except KeyboardInterrupt:
+        rprint("\n[yellow]Web server stopped[/yellow]")
+
+
 if __name__ == "__main__":
     app()

@@ -57,24 +57,18 @@ class ArtistInfo:
 
     def matches_filters(
         self,
-        gender: str | None = None,
         countries: list[str] | None = None,
         min_release_year: int | None = None,
     ) -> bool:
         """Check if artist matches the given filters.
 
         Args:
-            gender: Required gender (case-insensitive)
             countries: List of allowed country codes
             min_release_year: Minimum year for recent activity
 
         Returns:
             True if artist matches all specified filters
         """
-        if gender and self.gender:
-            if self.gender.lower() != gender.lower():
-                return False
-
         if countries and self.country:
             if self.country not in countries:
                 return False
@@ -381,7 +375,6 @@ class MusicBrainzClient:
     async def filter_artists_by_criteria(
         self,
         artist_names: list[str],
-        gender: str | None = None,
         countries: list[str] | None = None,
         min_release_year: int | None = None,
     ) -> list[str]:
@@ -389,7 +382,6 @@ class MusicBrainzClient:
 
         Args:
             artist_names: List of artist names to filter
-            gender: Required gender
             countries: Allowed country codes
             min_release_year: Minimum year for recent releases
 
@@ -417,13 +409,12 @@ class MusicBrainzClient:
                     )
                     continue
 
-            if info.matches_filters(gender=gender, countries=countries):
+            if info.matches_filters(countries=countries):
                 matching.append(name)
             else:
                 logger.debug(
                     "artist_filtered",
                     name=name,
-                    gender=info.gender,
                     country=info.country,
                 )
 

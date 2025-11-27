@@ -434,6 +434,19 @@ class Repository:
             )
             return list(result.scalars().all())
 
+    async def clear_sync_logs(self) -> int:
+        """Clear all sync logs.
+
+        Returns:
+            Number of logs deleted
+        """
+        async with self.session_factory() as session:
+            result = await session.execute(select(func.count(SyncLog.id)))
+            count = result.scalar() or 0
+            await session.execute(SyncLog.__table__.delete())
+            await session.commit()
+            return count
+
     # Utility methods
 
     async def get_stats(self) -> dict[str, Any]:

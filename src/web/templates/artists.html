@@ -1,0 +1,63 @@
+{% extends "base.html" %}
+
+{% block title %}Manage Artists - Headless Curator{% endblock %}
+
+{% block content %}
+<h1 style="margin-bottom: 30px;">Manage Seeds</h1>
+
+<div class="card">
+    <h2>Seed Artists</h2>
+    <p style="color: #888; margin-bottom: 20px;">
+        Artists used to discover similar music. Add your favorite artists to influence playlist generation.
+    </p>
+
+    <form action="/artists/add" method="post" class="add-form">
+        <input type="text" name="artist" placeholder="Enter artist name..." required>
+        <button type="submit" class="btn">Add Artist</button>
+    </form>
+
+    <div style="margin-top: 15px;">
+        {% for artist in artists %}
+        <span class="tag">
+            {{ artist }}
+            <form action="/artists/remove" method="post">
+                <input type="hidden" name="artist" value="{{ artist }}">
+                <button type="submit" title="Remove">&times;</button>
+            </form>
+        </span>
+        {% else %}
+        <p style="color: #888;">No seed artists configured.</p>
+        {% endfor %}
+    </div>
+</div>
+
+<div class="card">
+    <h2>Seed Songs</h2>
+    <p style="color: #888; margin-bottom: 20px;">
+        Specific songs to use for discovery (optional).
+    </p>
+
+    <form action="/songs/add" method="post" class="add-form">
+        <input type="text" name="song" placeholder="Enter song title..." required>
+        <button type="submit" class="btn">Add Song</button>
+    </form>
+
+    <div style="margin-top: 15px;">
+        {% for song in songs %}
+        <span class="tag">
+            {{ song }}
+            <form action="/songs/remove" method="post">
+                <input type="hidden" name="song" value="{{ song }}">
+                <button type="submit" title="Remove">&times;</button>
+            </form>
+        </span>
+        {% else %}
+        <p style="color: #888;">No seed songs configured.</p>
+        {% endfor %}
+    </div>
+</div>
+
+<div style="margin-top: 20px;">
+    <a href="/" class="btn btn-secondary">Back to Dashboard</a>
+</div>
+{% endblock %}

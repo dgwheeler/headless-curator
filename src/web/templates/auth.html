@@ -1,0 +1,88 @@
+{% extends "base.html" %}
+
+{% block title %}Authentication - Headless Curator{% endblock %}
+
+{% block content %}
+<h1 style="margin-bottom: 30px;">Authentication</h1>
+
+<div class="card">
+    <h2>Apple Music Status</h2>
+
+    <div style="display: flex; align-items: center; gap: 15px; margin-bottom: 20px;">
+        <div style="width: 60px; height: 60px; border-radius: 50%; display: flex; align-items: center; justify-content: center; font-size: 1.5rem;
+            {% if auth_status.valid %}
+            background: rgba(40, 167, 69, 0.2); color: #28a745;
+            {% else %}
+            background: rgba(220, 53, 69, 0.2); color: #dc3545;
+            {% endif %}
+        ">
+            {% if auth_status.valid %}&#10003;{% else %}!{% endif %}
+        </div>
+        <div>
+            <div style="font-size: 1.2rem; font-weight: 600;">
+                {% if auth_status.valid %}Authenticated{% else %}Authentication Required{% endif %}
+            </div>
+            <div style="color: #888;">{{ auth_status.message }}</div>
+        </div>
+    </div>
+
+    {% if not auth_status.valid %}
+    <div class="alert alert-warning">
+        <strong>Action Required:</strong> Run the following command in your terminal to authenticate:
+        <pre style="background: rgba(0,0,0,0.3); padding: 15px; border-radius: 6px; margin-top: 10px; overflow-x: auto;">
+cd /Users/dave/Projects/headless-curator
+source .venv/bin/activate
+curator auth</pre>
+    </div>
+    {% endif %}
+</div>
+
+<div class="card">
+    <h2>API Configuration</h2>
+    <table>
+        <tr>
+            <td style="color: #888; width: 150px;">Team ID</td>
+            <td>{{ settings.apple_music.team_id[:4] }}...{{ settings.apple_music.team_id[-4:] if settings.apple_music.team_id | length > 8 else settings.apple_music.team_id }}</td>
+        </tr>
+        <tr>
+            <td style="color: #888;">Key ID</td>
+            <td>{{ settings.apple_music.key_id }}</td>
+        </tr>
+        <tr>
+            <td style="color: #888;">Storefront</td>
+            <td>{{ settings.apple_music.storefront }}</td>
+        </tr>
+        <tr>
+            <td style="color: #888;">Private Key</td>
+            <td>{{ settings.apple_music.private_key_path }}</td>
+        </tr>
+    </table>
+</div>
+
+<div class="card">
+    <h2>Email Notifications</h2>
+    <table>
+        <tr>
+            <td style="color: #888; width: 150px;">Enabled</td>
+            <td class="{% if settings.email.enabled %}status-ok{% else %}status-error{% endif %}">
+                {{ 'Yes' if settings.email.enabled else 'No' }}
+            </td>
+        </tr>
+        <tr>
+            <td style="color: #888;">SMTP Host</td>
+            <td>{{ settings.email.smtp_host }}</td>
+        </tr>
+        <tr>
+            <td style="color: #888;">Recipient</td>
+            <td>{{ settings.email.recipient or 'Not configured' }}</td>
+        </tr>
+    </table>
+    <p style="color: #888; margin-top: 15px; font-size: 0.9rem;">
+        When authentication expires, an email will be sent to notify you to re-authenticate.
+    </p>
+</div>
+
+<div style="margin-top: 20px;">
+    <a href="/" class="btn btn-secondary">Back to Dashboard</a>
+</div>
+{% endblock %}
