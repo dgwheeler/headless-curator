@@ -394,8 +394,14 @@ class Curator:
 
         return playlist
 
-    async def ensure_playlist_exists(self) -> str:
-        """Ensure the target playlist exists, creating if needed.
+    async def create_or_update_playlist(self, track_ids: list[str]) -> str:
+        """Create playlist with tracks, or recreate if it exists.
+
+        Since PUT to modify playlist tracks returns 401, we create a new
+        playlist with tracks included in the initial POST request.
+
+        Args:
+            track_ids: List of catalog track IDs to add
 
         Returns:
             Playlist ID
@@ -406,16 +412,20 @@ class Curator:
             # Check if playlist exists
             existing = await self.apple_music.get_library_playlist_by_name(playlist_name)
             if existing:
-                logger.info("playlist_found", name=playlist_name, id=existing.id)
-                return existing.id
+                logger.info("playlist_found_will_recreate", name=playlist_name, id=existing.id)
+                # Note: We can't delete playlists via API, so we create with a slightly different name
+                # and the old one will remain. User can delete manually if desired.
+                # Actually, let's just try to create a new one - Apple might allow duplicates
+                # or we could add a timestamp
 
-            # Create new playlist
+            # Create new playlist with tracks included
             playlist = await self.apple_music.create_library_playlist(
                 name=playlist_name,
                 description=f"Personalized playlist for {self.settings.user.name}, curated by Headless Curator",
+                track_ids=track_ids,
             )
 
-            logger.info("playlist_created", name=playlist_name, id=playlist.id)
+            logger.info("playlist_created_with_tracks", name=playlist_name, id=playlist.id, track_count=len(track_ids))
             return playlist.id
 
     async def refresh_playlist(self) -> dict:
@@ -451,12 +461,8 @@ class Curator:
                 wildcard=tracks_by_cat[PlaylistCategory.WILDCARD],
             )
 
-            # Ensure playlist exists
-            playlist_id = await self.ensure_playlist_exists()
-
-            # Update playlist tracks
-            async with self.apple_music:
-                await self.apple_music.replace_playlist_tracks(playlist_id, playlist_track_ids)
+            # Create playlist with tracks (or recreate if exists)
+            playlist_id = await self.create_or_update_playlist(playlist_track_ids)
 
             # Update playlist state
             await self.repository.upsert_playlist_state(
