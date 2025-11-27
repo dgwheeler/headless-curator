@@ -62,13 +62,19 @@ class TrackAttributes(BaseModel):
 
     @property
     def release_datetime(self) -> datetime | None:
+        from datetime import timezone
         if self.release_date:
             try:
-                return datetime.fromisoformat(self.release_date)
+                dt = datetime.fromisoformat(self.release_date)
+                # Make timezone-aware if not already
+                if dt.tzinfo is None:
+                    dt = dt.replace(tzinfo=timezone.utc)
+                return dt
             except ValueError:
                 # Handle partial dates like "2024-01-01"
                 try:
-                    return datetime.strptime(self.release_date, "%Y-%m-%d")
+                    dt = datetime.strptime(self.release_date, "%Y-%m-%d")
+                    return dt.replace(tzinfo=timezone.utc)
                 except ValueError:
                     return None
         return None
